@@ -1,4 +1,4 @@
-LSTM Bot
+LSTM Bot Udacity nanodegree 
 
 This project is greatly inpacted by folowing PyTorch tutorials:
 https://pytorch.org/tutorials/beginner/chatbot_tutorial.html
