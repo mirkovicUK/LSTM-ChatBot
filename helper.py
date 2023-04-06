@@ -1,16 +1,18 @@
 ##############################################################################
-#read data
+#read process data 
 ##############################################################################
 import json
-def get_QA(path):
-    """Function to read data, return question and answers list"""
-    with open(path, 'r') as f:
+def get_QA(data_path):
+    """
+    Function to read json data, return list of question answer pairs    
+    """
+    with open(data_path, 'r') as f:
         for line in f:
             l = json.loads(line)
 
     questions, answers = list(), list()
 
-    #topicks that questions are from 
+    #topicks that questions are from not returned
     topicks = [] 
     for i in range(len(l['data'])):
         topicks.append(l['data'][i]['title'])
@@ -21,15 +23,41 @@ def get_QA(path):
             for k in range(len(l['data'][i]['paragraphs'][j]['qas'])):
                 questions.append(l['data'][i]['paragraphs'][j]['qas'][k]['question'])
                 answers.append(l['data'][i]['paragraphs'][j]['qas'][k]['answers'])
+    
+    # build QA pairs
+    pairs = list(zip(questions, answers))
+    #remove pairs with empty answers
+    for pair in pairs[:]:
+        if len(pair[1]) == 0:
+            pairs.remove(pair)
 
-    #extract only answers from list
-    a = []
-    for item in answers:
-        if not item:
-            a.append(None)# some answers are empty lists
-        else:
-            a.append(item[0]['text'])
-    return questions, a
+    # pick up only strings from answers
+    answ = list()
+    for pair in pairs:
+        answ.append(pair[1][0]['text'])
+
+    # build final pairs of QA
+    p = []
+    for i in range(len(pairs)):
+        text = [[pairs[i][0]], [answ[i]]]
+        p.append(text)
+
+
+    return p
+#############################################################################
+import codecs
+import csv
+def to_csw(pairs, path):
+    """Build csw file with pairs of questions and answers list
+        use above function get_QA() to get pairs
+    """
+    delimiter ='\t'
+    delimiter = str(codecs.decode(delimiter, "unicode_escape"))
+    with open(path, 'w', encoding='utf-8') as f:
+        writer = csv.writer(f, delimiter=delimiter, lineterminator='\n')
+        for i in range(len(pairs)):
+            pair = [(pairs[i][0][0]), (pairs[i][1][0])]
+            writer.writerow(pair)
 
 
 ############################################################################
@@ -45,22 +73,42 @@ def unicodeToAscii(s):
         if unicodedata.category(c) != 'Mn'
     )
 
+import re
+
 def normalizeString(s):
     """# Lowercase, trim, and remove non-letter characters"""
     s = unicodeToAscii(s.lower().strip())
     s = re.sub(r"([.!?])", r" \1", s)
+    s = re.sub(r"[^a-zA-Z0-9.!?]+", r" ", s)
     s = re.sub(r"\s+", r" ", s).strip()
-    return s 
+    return s  
+
+def get_pairs(data_path):
+    """
+    Read in QA.text normalize data remove empty data points after normalization
+    """
+    pairs = list()
+    with open(data_path, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f.readlines()):
+            pairs.append([normalizeString(s) for s in line.split('\t')])
+    #after normalization some data point are empty 
+    #remove empty pairs 
+    for pair in pairs[:]:
+        if len(pair[0]) == 0 or len(pair[1]) == 0:
+            pairs.remove(pair)
+
+    return pairs
+
 
 
 ############################################################################
 
-def filter_pairs(pairs, trim:int):
+def filter_pairs(pairs, trim):
     """keep only sentences with lenght less than trim"""
 
     print('Read {} sentence pairs'.format(len(pairs)))
     print(f'Trimming pairs with sentence longer than MAX_LEN({trim})......')
-    x = [pair for pair in pairs if len(pair[0].split()) < trim and len(pair[1].split()) < trim]
+    x = [pair for pair in pairs if len(pair[0].split()) < trim[0] and len(pair[1].split()) < trim[1]]
     print('trimmed to {} pairs'.format(len(x)))
     
     return x
@@ -75,7 +123,7 @@ def print_data_for_visualization(path = '.data/train-v2.0.json'):
         for line in f:
             l = json.loads(line)
             #a = l['data']
-    print(json.dumps(l, indent=2, sort_keys=True))
+    print(json.dumps(l))
 
 #############################################################################
 # data to tensor
@@ -121,7 +169,7 @@ def pairs2TrainData(batch_pairs, vocab):
         output_batch.append(pair[1])
     inp, lengths = input_tensor(input_batch, vocab)
     output, max_target_len = output_tensor(output_batch, vocab)
-    return inp, lengths, output, max_target_len
+    return inp.T, lengths, output.T, max_target_len
 
 ############################################################################
 #custom data loaders
@@ -132,139 +180,65 @@ def data_loaders(data, vocab, batch_size):
     input tensor , shape(seq, batch_size)
     lenghts tensor 
     target tensor
-    max target len
+    max target len for batch
     """
     for i in range(0, len(data), batch_size):
         yield pairs2TrainData(data[i:i+batch_size], vocab)
 
-################################################################################
-#encoder
-################################################################################
-import torch.nn as nn
 
-class Encoder(nn.Module):
-    def __init__(self, input_size,embeddings, embedding_dim, hidden_size, dropout , n_layers) -> None:
-        super(Encoder, self).__init__()
-        self.input_size = input_size # len(vocab)
-        self.hidden_size = hidden_size
-        self.drop_prob = dropout
-        self.n_layers = n_layers
-        self.embedding_dim = embedding_dim
+#############################################################################################
 
-
-        self.embed = embeddings
-        #LSTM
-        self.lstm = nn.LSTM(
-            input_size = self.embedding_dim,
-            hidden_size = self.hidden_size,
-            num_layers = self.n_layers,
-            batch_first = False, # input shape (seq_len, batch_size, embedding_dim)
-            dropout = (0 if n_layers == 1 else dropout),
-        )
-        self.dropout = nn.Dropout(p=self.drop_prob)
-
-    
-    def forward(self, x, lengths, hidden=None):
-        #run input trought embeddings with dropout
-        # x.shape = seq_len, batch_size
-        embedding = self.dropout(self.embed(x)) #x.shape (seq_len, batch_size, embedding_dim)
-        # Pack padded batch of sequences for RNN  
-        packed = nn.utils.rnn.pack_padded_sequence(embedding, lengths=lengths)
-        #only take hidden state
-        output, hidden = self.lstm(packed, hidden) # hidden.shape (n_layers, batch_size, hidden_size)
-        #unpack padding
-        output,_ = nn.utils.rnn.pad_packed_sequence(output)
-        output = self.dropout(output)
-
-        return output, hidden # return embedding matrix reuse it in decoder
-    
 ######################################################################################
-#DECODER
+#Embedings initializer
 ######################################################################################
-import torch.nn.functional as F
-import torch
-
-class Decoder(nn.Module):
-    def __init__(self, embeddings, hidden_size, embeding_dim, output_size, dropout, n_layers) -> None:
-        super(Decoder, self).__init__()
-
-        #keep:
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.n_layers = n_layers
-        self.dropout = dropout
-        self.embedding_dim = embeding_dim
+import numpy as np
+def initialize_embeddings(w2v, embeddings, vocab):
+    """Initialize embeddings with pretrained weights , as per project requirements
+    """
+    counter = 0
+    for word in vocab.word2int:
+        try:
+            embeddings.weight.data[vocab.word2int[word]] = torch.from_numpy(np.copy(w2v.wv[word]))
+            counter +=1
+        except KeyError:
+            pass
+    print(f'Initializet total {counter} embeddings with brown embedings, out of total {len(w2v.wv)}')
         
-        #Define layers
-        self.embed = embeddings #use same embedings as encoder
-        self.dropout = nn.Dropout(p=dropout)
-        self.lstm = nn.LSTM(
-            input_size = self.embedding_dim,
-            hidden_size = self.hidden_size,
-            num_layers = self.n_layers,
-            batch_first = False, # input shape (seq_len, batch_size, embedding_dim)
-            dropout = (0 if n_layers == 1 else dropout),
-        )
-        self.fc = nn.Linear(hidden_size, output_size)
-    
-    def forward(self, x, encoder_hidden):
-        embedded = self.dropout(self.embed(x))
-        #forward pass trought LSTM cells
-        output, hidden = self.lstm(embedded, encoder_hidden)
-        #forward fc
-        output = self.dropout(self.fc(output))
+#####################################################################################
+# chatbot comunication protocol 
+######################################################################################
+def evaluate(model, vocab, sentence, max_len=7):
+    idx = [SOS_token] + [vocab.word2int[x] for x in sentence.split()] + [EOS_token]
+    input_tensor = torch.LongTensor(idx).unsqueeze(0)
+    lenghts_tensor = torch.LongTensor([input_tensor.shape[0]])
+    targets = None
+    output = model(input_tensor,targets, max_len, lenghts_tensor)
+    _, output = torch.max(output, dim=-1)
+    words = output.tolist()
 
-        return output, hidden
-    
-#####################################################################################################
-#Seq2seq
-#####################################################################################################
-import torch
-import torch.nn as nn
-from helper import Encoder, Decoder
-import random
+    a = []
+    print(words)
+    for ii in words[0]:
+        word = vocab.int2word[ii]
+        a.append(word)
+    return a
 
-USE_CUDA = torch.cuda.is_available()
-device = torch.device("cuda" if USE_CUDA else "cpu")
-
-class Seq2seq(nn.Module):
-    def __init__(self, input_size, embeddings, embedding_dim, hidden_size, output_size, dropout = 0.25, n_layers=2) -> None:
-        super(Seq2seq, self).__init__()
-
-        print('Building encoder and decoder ...')
-        self.encoder = Encoder(input_size, embeddings, embedding_dim, hidden_size, dropout, n_layers)
-        self.decoder = Decoder(embeddings, hidden_size, embedding_dim ,output_size, dropout, n_layers)
-        print('Models built and ready to go!')
-
-    def forward(self, inputs, targets, max_target_len, inputs_lenghts, teacher_forcing_ratio = 0.5):
-        # Forward pass through encoder
-        _, encoder_hidden = self.encoder(inputs, inputs_lenghts)
-        #initialize decoder inputs
-        if self.encoder.lstm.batch_first:
-            decoder_inputs = torch.ones(inputs.shape[0],1, device=device, dtype=torch.long) *SOS_token
-        else:
-            decoder_inputs = torch.ones(1,inputs.shape[1], device=device, dtype=torch.long)*SOS_token
-        
-        #tensor to append decoder outputs
-        all_tokens = torch.zeros([0], device=device, dtype=torch.long)
-        #set decoder hidden state to encoder last hidden
-        decoder_hidden=encoder_hidden
-
-        # get 1 token from decoder on each iteration 
-        for i in range(max_target_len):
-            #forwar pass trought Decoder
-            decoder_output, decoder_hidden = self.decoder(decoder_inputs, decoder_hidden)
-            decoder_output.squeeze_(dim=0)
-            #set decoder input to index of class with highest score 
-            _, decoder_inputs = torch.max(decoder_output, dim=1)
-            # shape input (seq_len, Batch_size)
-            decoder_inputs.unsqueeze_(dim=0)
-            #record token for this iteration all_tokens.shape = (seq_len, batch_size)
-            all_tokens = torch.cat((all_tokens, decoder_inputs), dim=0)
+def evaluateInput(model, vocab):
+    input_sentence = ''
+    while(1):
+        try:
+            # Get input sentence
+            input_sentence = input('> ')
+            # Check if it is quit case
+            if input_sentence == 'q' or input_sentence == 'quit': break
+            # Normalize sentence
+            input_sentence = normalizeString(input_sentence)
+            # Evaluate sentence
+            print(input_sentence)
+            output_sentence = evaluate(model, vocab, input_sentence)
             
-            #teacher_forcing
-            teacher_forsing = True if random.random() < teacher_forcing_ratio else False
-            decoder_inputs = targets[i].unsqueeze_(0) if teacher_forsing else decoder_inputs
+            out = [word for word in output_sentence if word!='EOS' and word!='PAD' and word!='SOS']
+            print('Bot:', ' '.join(out))
 
-        return all_tokens
-
+        except KeyError:
+            print("Error: Encountered unknown word.")

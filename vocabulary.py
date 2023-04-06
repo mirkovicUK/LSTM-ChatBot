@@ -6,7 +6,7 @@ class Vocab:
     """"
     Vocab 
     """
-    def __init__(self, name='vocab', trim_count=3) -> None:
+    def __init__(self, name='vocab', trim_count = 3) -> None:
         self.name = name
         self.trim_count = trim_count
         self.trimmed = False
