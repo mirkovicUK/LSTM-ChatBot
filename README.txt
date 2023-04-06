@@ -1,6 +1,6 @@
 LSTM Bot Udacity nanodegree 
 
-This project is greatly inpacted by folowing PyTorch tutorials:
+This project is greatly impacted by this PyTorch tutorials:
 https://pytorch.org/tutorials/beginner/chatbot_tutorial.html
 https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html 
 
